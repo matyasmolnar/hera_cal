@@ -9,6 +9,8 @@ import argparse
 import functools
 import numpy as np
 import operator
+import pickle
+import sys
 import gc as garbage_collector
 import datetime
 
@@ -209,6 +211,7 @@ def lst_bin(data_list, lst_list, flags_list=None, dlst=None, begin_lst=None, lst
     data_avg = odict()
     data_count = odict()
     data_std = odict()
+    bad_JDs = odict()
 
     # return un-averaged data if desired
     if return_no_avg:
@@ -228,6 +231,8 @@ def lst_bin(data_list, lst_list, flags_list=None, dlst=None, begin_lst=None, lst
         real_std = []
         imag_std = []
         bin_count = []
+
+        bad_JDs[key] = odict()
 
         # iterate over sorted LST grid indices in data[key]
         for j, ind in enumerate(sorted(data[key].keys())):
@@ -253,6 +258,8 @@ def lst_bin(data_list, lst_list, flags_list=None, dlst=None, begin_lst=None, lst
 
                 # set clipped data to nan
                 d[clip_flags] *= np.nan
+
+                bad_JDs[key][ind] = clip_flags
 
                 # merge clip flags
                 f += clip_flags
@@ -305,8 +312,9 @@ def lst_bin(data_list, lst_list, flags_list=None, dlst=None, begin_lst=None, lst
     flags_min = DataContainer(flags_min)
     data_std = DataContainer(data_std)
     data_count = DataContainer(data_count)
+    bad_JDs = DataContainer(bad_JDs)
 
-    return lst_bins, data_avg, flags_min, data_std, data_count
+    return lst_bins, data_avg, flags_min, data_std, data_count, bad_JDs
 
 
 def lst_align(data, data_lsts, flags=None, dlst=None,
@@ -512,7 +520,7 @@ def config_lst_bin_files(data_files, dlst=None, atol=1e-10, lst_start=None, lst_
 
 
 def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_per_file=60,
-                  file_ext="{type}.{time:7.5f}.uvh5", outdir=None, overwrite=False, history='', lst_start=None, 
+                  file_ext="{type}.{time:7.5f}.uvh5", outdir=None, overwrite=False, history='', lst_start=None,
                   lst_stop=None, fixed_lst_start=False, atol=1e-6, sig_clip=True, sigma=5.0, min_N=5, rephase=False,
                   output_file_select=None, Nbls_to_load=None, ignore_flags=False, **kwargs):
     """
@@ -618,7 +626,7 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
         fmax = f_lst[-1] + (dlst / 2 + atol)
 
         # iterate over baseline groups (for memory efficiency)
-        data_conts, flag_conts, std_conts, num_conts = [], [], [], []
+        data_conts, flag_conts, std_conts, num_conts, bad_jds_conts = [], [], [], [], []
         for bi, blgroup in enumerate(blgroups):
             utils.echo("starting baseline-group {} / {}: {}".format(bi + 1, len(blgroups), datetime.datetime.now()), type=0, verbose=verbose)
 
@@ -627,7 +635,7 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
             file_list = []
             flgs_list = []
             lst_list = []
-     
+
             # iterate over individual nights to bin
             for j in range(len(data_files)):
                 nightly_data_list = []
@@ -696,7 +704,7 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
             if ignore_flags:
                 flgs_list = None
             (bin_lst, bin_data, flag_data, std_data,
-             num_data) = lst_bin(data_list, lst_list, flags_list=flgs_list, dlst=dlst, begin_lst=begin_lst,
+             num_data, bad_jds) = lst_bin(data_list, lst_list, flags_list=flgs_list, dlst=dlst, begin_lst=begin_lst,
                                  lst_low=fmin, lst_hi=fmax, truncate_empty=False, sig_clip=sig_clip,
                                  sigma=sigma, min_N=min_N, rephase=rephase, freq_array=freq_array, antpos=antpos)
 
@@ -705,6 +713,7 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
             flag_conts.append(flag_data)
             std_conts.append(std_data)
             num_conts.append(num_data)
+            bad_jds_conts.append(bad_jds)
 
         # if all blgroups were empty skip
         if len(data_conts) == 0:
@@ -716,13 +725,14 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
         flag_data = DataContainer(dict(functools.reduce(operator.add, [list(dc.items()) for dc in flag_conts])))
         std_data = DataContainer(dict(functools.reduce(operator.add, [list(dc.items()) for dc in std_conts])))
         num_data = DataContainer(dict(functools.reduce(operator.add, [list(dc.items()) for dc in num_conts])))
+        bad_jds = DataContainer(dict(functools.reduce(operator.add, [list(dc.items()) for dc in bad_jds_conts])))
 
         # update history
         file_history = history + " Input files: " + "-".join(list(map(lambda ff: os.path.basename(ff), file_list)))
         kwargs['history'] = file_history + version.history_string()
 
         # form integration time array
-        _Nbls = len(set([bl[:2] for bl in list(bin_data.keys())])) 
+        _Nbls = len(set([bl[:2] for bl in list(bin_data.keys())]))
         kwargs['integration_time'] = np.ones(len(bin_lst) * _Nbls, dtype=np.float64) * integration_time
 
         # file in data ext
@@ -745,6 +755,10 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
                      nsamples=num_data, filetype='uvh5', x_orientation=x_orientation, **kwargs)
         io.write_vis(std_file, std_data, bin_lst, freq_array, antpos, flags=flag_data, verbose=verbose,
                      nsamples=num_data, filetype='uvh5', x_orientation=x_orientation, **kwargs)
+
+        bad_jds_fn = os.path.join(outdir, bin_file.replace('HH.OCRSL.uvh5', 'bad_jds.pkl'))
+        with open(bad_jds_fn, 'wb') as dump_file:
+            pickle.dump(bad_jds, dump_file, pickle.HIGHEST_PROTOCOL)
 
         del bin_file, std_file, bin_data, std_data, num_data, bin_lst, flag_data
         del data_conts, flag_conts, std_conts, num_conts
@@ -849,7 +863,6 @@ def sigma_clip(array, flags=None, sigma=4.0, axis=0, min_N=4):
 
     # get clipped data
     clip = np.abs(array - location) / scale > sigma
-
     # set clipped data to nan and set clipped flags to True
     array[clip] *= np.nan
     clip_flags[clip] = True
