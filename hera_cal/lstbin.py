@@ -12,6 +12,10 @@ import operator
 import gc as garbage_collector
 import datetime
 
+import math
+import pickle
+import sys
+
 from . import utils
 from . import version
 from . import abscal
@@ -19,6 +23,10 @@ from . import io
 from . import redcal
 from . import apply_cal
 from .datacontainer import DataContainer
+
+sys.path.insert(1, '/lustre/aoc/projects/hera/mmolnar/simpleredcal')
+from align_utils import idr2_jdsx
+from red_utils import find_nearest, find_zen_file
 
 
 def baselines_same_across_nights(data_list):
@@ -579,7 +587,7 @@ def config_lst_bin_files(data_files, dlst=None, atol=1e-10, lst_start=None, lst_
 
     # if lst_start is sufficiently below lmin, shift everything down an octave
     if lst_start < (lmin - np.pi):
-        lst_arrays -= 2 * np.pi
+        lst_arrays = [[la - 2 * np.pi for la in day] for day in lst_arrays]
         lmin -= 2 * np.pi
         lmax -= 2 * np.pi
 
@@ -676,6 +684,45 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
     zen.{pol}.LST.{file_lst}.uv : holds LST bin avg (data_array) and bin count (nsample_array)
     zen.{pol}.STD.{file_lst}.uv : holds LST bin stand dev along real and imag (data_array)
     """
+    # # For debugging
+    # lst_start =  1.2
+    # lst_stop = 1.22
+    # print('LST range: {}-{}'.format(lst_start, lst_stop))
+
+    simpleredcal_path = '/lustre/aoc/projects/hera/mmolnar/simpleredcal'
+
+    # tot_flags = cal_flags + MAD_flags (from LST-bin) + N Kern manual flags + xd_rel_cal flags
+    # tot_flags_fn = 'b2f2_tot_flags.npz'
+    # tot_flags = np.load(os.path.join(simpleredcal_path, tot_flags_fn))['flags']
+
+    # only apply the flags from xd_rel_cal modz clipping at 5 sigma level
+    modz_fn = 'b2f2_mz_flags.npz'
+    modz_flags = np.load(os.path.join(simpleredcal_path, modz_fn))['simga5']
+    tot_flags = modz_flags
+
+    jd_label_dict = np.load(os.path.join(simpleredcal_path, 'b2f2_jd_dict.npz'), \
+                        allow_pickle=True)['jd_dict'].item()
+
+    xd_dir_path = '/lustre/aoc/projects/hera/mmolnar/simpleredcal/xd_rel_dfs_nn'
+    with open(os.path.join(xd_dir_path, 'xd_rel_df.1.1477.ee.md.pkl'), 'rb') as f:
+        md = pickle.load(f)
+    RedG = md['redg']
+
+    test_uv = find_zen_file(2458099.45361)
+    hd = io.HERAData(test_uv)
+    b2_freq_start = 150.3*1e6 # MHz
+    b2_freq_stop = 167.8*1e6 # MHz
+    band2_chans = np.where(np.logical_and(hd.freqs >= b2_freq_start, hd.freqs <= b2_freq_stop))[0]
+
+    with open(os.path.join(os.path.dirname(xd_dir_path), 'jd_lst_map_idr2.pkl'), 'rb') as f:
+        jd_lst_map_idr2 = pickle.load(f)
+
+    jd_fracs = [int(str(round(math.modf(jdr)[0], 6))[2:7]) for jdr in jd_label_dict.keys()]
+    jd_int = int(list(jd_label_dict.keys())[0])
+    jd_lst_map_idr2 = jd_lst_map_idr2.loc[jd_int][jd_lst_map_idr2.loc[int(jd_int)].\
+                        index.get_level_values('JD_frac').isin(jd_fracs)]
+    ref_lsts = np.concatenate(jd_lst_map_idr2['LASTs'].values).ravel()
+
     # get file lst arrays
     (lst_grid, dlst, file_lsts, begin_lst, lst_arrs,
      time_arrs) = config_lst_bin_files(data_files, dlst=dlst, lst_start=lst_start, lst_stop=lst_stop, fixed_lst_start=fixed_lst_start,
@@ -790,6 +837,7 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
                                 bls_to_load.extend(bl_nightly_dict[j])
                                 
                         data, flags, nsamps = hd.read(bls=bls_to_load, times=tarr[tinds])
+
                         # if we want to throw away data associated with flagged antennas, throw it away.
                         if ex_ant_yaml_files is not None:
                             from hera_qm.utils import apply_yaml_flags
@@ -820,6 +868,25 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
                                 gains, cal_flags, quals, totquals = uvc.build_calcontainers()
                             apply_cal.calibrate_in_place(data, gains, data_flags=flags, cal_flags=cal_flags,
                                                          gain_convention=uvc.gain_convention)
+
+
+                    # applying custom flags
+                    jdt = int(tarr[tinds][0])
+                    lstt = larr[tinds][0]
+                    resolution = np.median(np.ediff1d(ref_lsts))
+
+                    if lstt >= ref_lsts[0] - resolution/2 and lstt <= ref_lsts[-1] + resolution/2:
+                        lst_idx = find_nearest(ref_lsts, lstt)[1]
+                        day_idx = idr2_jdsx.index(int(jdt))
+
+                        flags_jdt = tot_flags[day_idx, :, lst_idx:lst_idx + len(larr[tinds]), :]
+
+                        bl_dict = [(i, j, 'ee') for i, j in RedG[:, 1:]]
+
+                        for bl in flags.keys():
+                            if bl in bl_dict:
+                                bl_idx = bl_dict.index(bl)
+                                flags[bl][:flags_jdt.shape[1], band2_chans] += flags_jdt[..., bl_idx].transpose()
 
                     # redundantly average baselines, keying to baseline group key
                     # on earliest night.
@@ -874,6 +941,7 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
             flag_conts.append(flag_data)
             std_conts.append(std_data)
             num_conts.append(num_data)
+
         # if all blgroups were empty skip
         if len(data_conts) == 0:
             utils.echo("data_list is empty for beginning LST {}".format(f_lst[0]), verbose=verbose)
