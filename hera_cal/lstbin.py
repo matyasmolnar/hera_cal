@@ -9,6 +9,7 @@ import argparse
 import functools
 import numpy as np
 import operator
+import pickle
 import gc as garbage_collector
 import datetime
 
@@ -865,15 +866,19 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
             # pass through lst-bin function
             if ignore_flags:
                 flgs_list = None
-            (bin_lst, bin_data, flag_data, std_data,
-             num_data) = lst_bin(data_list, lst_list, flags_list=flgs_list, dlst=dlst, begin_lst=begin_lst,
+                (lst_bins, data_bin, flags_min)
+            # add return_no_avg=True in lst_bin below. Also reduce number of outputs.
+            # (bin_lst, bin_data, flag_data, std_data,
+            #  num_data) = 
+            (bin_lst, bin_data, flag_data) = lst_bin(data_list, lst_list, flags_list=flgs_list, dlst=dlst, begin_lst=begin_lst,
                                  lst_low=fmin, lst_hi=fmax, truncate_empty=False, sig_clip=sig_clip, nsamples_list=nsamples_list,
-                                 sigma=sigma, min_N=min_N, rephase=rephase, freq_array=freq_array, antpos=antpos, bl_list=all_blgroup_baselines)
+                                 sigma=sigma, min_N=min_N, rephase=rephase, freq_array=freq_array, antpos=antpos, bl_list=all_blgroup_baselines, 
+                                 return_no_avg=True)
             # append to lists
             data_conts.append(bin_data)
             flag_conts.append(flag_data)
-            std_conts.append(std_data)
-            num_conts.append(num_data)
+            # std_conts.append(std_data)
+            # num_conts.append(num_data)
         # if all blgroups were empty skip
         if len(data_conts) == 0:
             utils.echo("data_list is empty for beginning LST {}".format(f_lst[0]), verbose=verbose)
@@ -882,8 +887,8 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
         # join DataContainers across blgroups
         bin_data = DataContainer(dict(functools.reduce(operator.add, [list(dc.items()) for dc in data_conts])))
         flag_data = DataContainer(dict(functools.reduce(operator.add, [list(dc.items()) for dc in flag_conts])))
-        std_data = DataContainer(dict(functools.reduce(operator.add, [list(dc.items()) for dc in std_conts])))
-        num_data = DataContainer(dict(functools.reduce(operator.add, [list(dc.items()) for dc in num_conts])))
+        # std_data = DataContainer(dict(functools.reduce(operator.add, [list(dc.items()) for dc in std_conts])))
+        # num_data = DataContainer(dict(functools.reduce(operator.add, [list(dc.items()) for dc in num_conts])))
 
         # update history
         file_history = history + " Input files: " + "-".join(list(map(lambda ff: os.path.basename(ff), file_list)))
@@ -912,13 +917,19 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
             utils.echo("{} exists, not overwriting".format(bin_file), verbose=verbose)
             continue
         # write to file
-        io.write_vis(bin_file, bin_data, bin_lst, freq_array, antpos, flags=flag_data, verbose=verbose,
-                     nsamples=num_data, filetype='uvh5', x_orientation=x_orientation, **kwargs)
-        io.write_vis(std_file, std_data, bin_lst, freq_array, antpos, flags=flag_data, verbose=verbose,
-                     nsamples=num_data, filetype='uvh5', x_orientation=x_orientation, **kwargs)
 
-        del bin_file, std_file, bin_data, std_data, num_data, bin_lst, flag_data
-        del data_conts, flag_conts, std_conts, num_conts
+        # pickle bin_data only
+        # bin_data has the wrong dimensions to be easily written with to uvh5 with io.write_vis
+        with open(os.path.join(outdir, bin_file)+'.pkl', 'wb') as handle:
+            pickle.dump(bin_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        # io.write_vis(bin_file, bin_data, bin_lst, freq_array, antpos, flags=flag_data, verbose=verbose,
+        #              nsamples=num_data, filetype='uvh5', x_orientation=x_orientation, **kwargs)
+        # io.write_vis(std_file, std_data, bin_lst, freq_array, antpos, flags=flag_data, verbose=verbose,
+        #              nsamples=num_data, filetype='uvh5', x_orientation=x_orientation, **kwargs)
+
+        del bin_file, std_file, bin_data, bin_lst, flag_data#, std_data, num_data, 
+        del data_conts, flag_conts#, std_conts, num_conts
         garbage_collector.collect()
 
 
