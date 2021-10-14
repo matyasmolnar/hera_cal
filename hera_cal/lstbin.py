@@ -306,13 +306,13 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
     data_count = odict()
     data_std = odict()
 
-    # return un-averaged data if desired
-    if return_no_avg:
-        # return all binned data instead of just the bin average
-        data_bins = odict([(k1, [data[k1][k2] for k2 in data[k1].keys()]) for k1 in data.keys()])
-        flag_bins = odict([(k1, [flags[k1][k2] for k2 in flags[k1].keys()]) for k1 in flags.keys()])
+    # # return un-averaged data if desired
+    # if return_no_avg:
+    #     # return all binned data instead of just the bin average
+    #     data_bins = odict([(k1, [data[k1][k2] for k2 in data[k1].keys()]) for k1 in data.keys()])
+    #     flag_bins = odict([(k1, [flags[k1][k2] for k2 in flags[k1].keys()]) for k1 in flags.keys()])
 
-        return lst_bins, data_bins, flag_bins
+    #     return lst_bins, data_bins, flag_bins
 
     # iterate over data keys (baselines) and get statistics
     for i, key in enumerate(data.keys()):
@@ -320,6 +320,8 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
         # create empty lists
         real_avg = []
         imag_avg = []
+        real_unavg = []
+        imag_unavg = []
         f_min = []
         real_std = []
         imag_std = []
@@ -376,6 +378,10 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
                 real_avg.append(np.sum(d.real * n, axis=0) / norm)
                 imag_avg.append(np.sum(d.imag * n, axis=0) / norm)
 
+            # hack to return unaveraged data
+            real_unavg.append(d.real)
+            imag_unavg.append(d.imag)
+
             # get minimum bin flag
             f_min.append(np.nanmin(f, axis=0))
 
@@ -386,6 +392,7 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
 
         # get final statistics
         d_avg = np.array(real_avg) + 1j * np.array(imag_avg)
+        d_unavg = np.array(real_unavg) + 1j * np.array(imag_unavg)
         f_min = np.array(f_min)
         d_std = np.array(real_std) + 1j * np.array(imag_std)
         d_num = np.array(bin_count).astype(np.float)
@@ -393,12 +400,13 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
         # fill nans
         d_nan = np.isnan(d_avg)
         d_avg[d_nan] = 1.0
+        # d_unavg[np.isnan(d_unavg)] = 1.0  # opt to keep nans in
         f_min[d_nan] = True
         d_std[d_nan] = 1.0
         d_num[d_nan] = 0.0
 
         # insert into dictionaries
-        data_avg[key] = d_avg
+        data_avg[key] = d_unavg  # d_avg - return unaveraged data here
         flags_min[key] = f_min
         data_std[key] = d_std
         data_count[key] = d_num
@@ -409,7 +417,7 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
     data_std = DataContainer(data_std)
     data_count = DataContainer(data_count)
 
-    return lst_bins, data_avg, flags_min, data_std, data_count
+    return lst_bins, data_avg, flags_min#, data_std, data_count
 
 
 def lst_align(data, data_lsts, flags=None, dlst=None,
