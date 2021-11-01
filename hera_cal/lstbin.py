@@ -384,7 +384,7 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
                     if np.isnan(d_f).all():
                         gm = np.nan + 1j*np.nan
                     else:
-                        gm = geometric_median(d_f, weights=n[:, freq], init_guess=gm_init)
+                        gm = geometric_median(d_f, weights=n[:, freq], init_guess=gm_init, keep_res=True)
                         gm_init = gm
                     geo_med[freq] = gm
 
