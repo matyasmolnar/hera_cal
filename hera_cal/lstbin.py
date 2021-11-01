@@ -11,6 +11,8 @@ import numpy as np
 import operator
 import gc as garbage_collector
 import datetime
+import warnings
+from robstat.robstat import geometric_median
 
 from . import utils
 from . import version
@@ -366,19 +368,37 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
                 # for mean to account for varying nsamples, take nsamples weighted sum.
                 # (inverse variance weighted sum).
                 isfinite = np.isfinite(d)
-                d[~isfinite] = 0.0
+                # d[~isfinite] = 0.0
                 n[~isfinite] = 0.0
 
-                norm = np.sum(n, axis=0).clip(1e-99, np.inf)
-                real_avg.append(np.sum(d.real * n, axis=0) / norm)
-                imag_avg.append(np.sum(d.imag * n, axis=0) / norm)
+                # norm = np.sum(n, axis=0).clip(1e-99, np.inf)
+                # real_avg.append(np.sum(d.real * n, axis=0) / norm)
+                # imag_avg.append(np.sum(d.imag * n, axis=0) / norm)
+
+                # implement geometric median here
+                # shape (Ndays x Nfreqs)
+                geo_med = np.empty(d.shape[1], dtype=complex)
+                gm_init = None
+                for freq in range(d.shape[1]):
+                    d_f = d[:, freq]
+                    if np.isnan(d_f).all():
+                        gm = np.nan + 1j*np.nan
+                    else:
+                        gm = geometric_median(d_f, weights=n[:, freq], init_guess=gm_init)
+                        gm_init = gm
+                    geo_med[freq] = gm
+
+                real_avg.append(geo_med.real)
+                imag_avg.append(geo_med.imag)
 
             # get minimum bin flag
             f_min.append(np.nanmin(f, axis=0))
 
             # get other stats
-            real_std.append(np.nanstd(d.real, axis=0))
-            imag_std.append(np.nanstd(d.imag, axis=0))
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', 'Degrees of freedom <= 0 for slice.')
+                real_std.append(np.nanstd(d.real, axis=0))
+                imag_std.append(np.nanstd(d.imag, axis=0))
             bin_count.append(np.nansum(~np.isnan(d) * n, axis=0))
 
         # get final statistics
