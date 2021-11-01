@@ -11,6 +11,7 @@ import numpy as np
 import operator
 import gc as garbage_collector
 import datetime
+import multiprocessing
 import warnings
 from robstat.robstat import geometric_median
 
@@ -377,16 +378,32 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
 
                 # implement geometric median here
                 # shape (Ndays x Nfreqs)
-                geo_med = np.empty(d.shape[1], dtype=complex)
-                gm_init = None
-                for freq in range(d.shape[1]):
-                    d_f = d[:, freq]
-                    if np.isnan(d_f).all():
-                        gm = np.nan + 1j*np.nan
-                    else:
-                        gm = geometric_median(d_f, weights=n[:, freq], init_guess=gm_init, keep_res=True)
-                        gm_init = gm
-                    geo_med[freq] = gm
+                multi_p = True
+                
+                if multi_p:
+                    def freq_iter(freq):
+                        d_f = d[:, freq]
+                        if np.isnan(d_f).all():
+                            gm = np.nan + 1j*np.nan
+                        else:
+                            gm_init = np.nanmedian(d_f)
+                            gm = geometric_median(d_f, weights=n[:, freq], init_guess=gm_init, keep_res=True)
+                        return gm
+
+                    m_pool = multiprocessing.Pool(multiprocessing.cpu_count())
+                    geo_med = np.array(m_pool.map(freq_iter, range(d.shape[1])))
+
+                else:
+                    geo_med = np.empty(d.shape[1], dtype=complex)
+                    gm_init = None
+                    for freq in range(d.shape[1]):
+                        d_f = d[:, freq]
+                        if np.isnan(d_f).all():
+                            gm = np.nan + 1j*np.nan
+                        else:
+                            gm = geometric_median(d_f, weights=n[:, freq], init_guess=gm_init, keep_res=True)
+                            gm_init = gm
+                        geo_med[freq] = gm
 
                 real_avg.append(geo_med.real)
                 imag_avg.append(geo_med.imag)
