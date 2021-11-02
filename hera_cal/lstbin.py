@@ -53,6 +53,19 @@ def baselines_same_across_nights(data_list):
     return same_across_nights
 
 
+def freq_iter(data, weights, freq):
+    """
+    For multiprocessing of geometric median
+    """
+    d_f = data[:, freq]
+    if np.isnan(d_f).all():
+        gm = np.nan + 1j*np.nan
+    else:
+        gm_init = np.nanmedian(d_f)
+        gm = geometric_median(d_f, weights=weights[:, freq], init_guess=gm_init, keep_res=True)
+    return gm
+
+
 def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None, begin_lst=None, lst_low=None,
             lst_hi=None, flag_thresh=0.7, atol=1e-10, median=False, truncate_empty=True,
             sig_clip=False, sigma=4.0, min_N=4, return_no_avg=False, antpos=None, rephase=False,
@@ -381,17 +394,9 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
                 multi_p = True
                 
                 if multi_p:
-                    def freq_iter(freq):
-                        d_f = d[:, freq]
-                        if np.isnan(d_f).all():
-                            gm = np.nan + 1j*np.nan
-                        else:
-                            gm_init = np.nanmedian(d_f)
-                            gm = geometric_median(d_f, weights=n[:, freq], init_guess=gm_init, keep_res=True)
-                        return gm
-
+                    partial_freq_iter = functools.partial(freq_iter, d, n)
                     m_pool = multiprocessing.Pool(multiprocessing.cpu_count())
-                    geo_med = np.array(m_pool.map(freq_iter, range(d.shape[1])))
+                    geo_med = np.array(m_pool.map(partial_freq_iter, range(d.shape[1])))
 
                 else:
                     geo_med = np.empty(d.shape[1], dtype=complex)
