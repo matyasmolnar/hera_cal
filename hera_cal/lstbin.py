@@ -396,7 +396,10 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
                 if multi_p:
                     partial_freq_iter = functools.partial(freq_iter, d, n)
                     m_pool = multiprocessing.Pool(multiprocessing.cpu_count())
-                    geo_med = np.array(m_pool.map(partial_freq_iter, range(d.shape[1])))
+                    pool_res = m_pool.map(partial_freq_iter, range(d.shape[1]))
+                    m_pool.close()
+                    m_pool.join()
+                    geo_med = np.array(pool_res)
 
                 else:
                     geo_med = np.empty(d.shape[1], dtype=complex)
