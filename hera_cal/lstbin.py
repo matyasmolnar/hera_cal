@@ -374,47 +374,52 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
             d[:, flag_bin] *= np.nan
             f[:, flag_bin] = True
 
-            # take bin average: real and imag separately
-            if median:
-                real_avg.append(np.nanmedian(d.real, axis=0))
-                imag_avg.append(np.nanmedian(d.imag, axis=0))
+            if np.isnan(d).all():
+                nan_arr = np.empty(d.shape[1])
+                nan_arr.fill(np.nan)
+                real_avg.append(nan_arr)
+                imag_avg.append(nan_arr)
             else:
-                # for mean to account for varying nsamples, take nsamples weighted sum.
-                # (inverse variance weighted sum).
-                isfinite = np.isfinite(d)
-                # d[~isfinite] = 0.0
-                n[~isfinite] = 0.0
-
-                # norm = np.sum(n, axis=0).clip(1e-99, np.inf)
-                # real_avg.append(np.sum(d.real * n, axis=0) / norm)
-                # imag_avg.append(np.sum(d.imag * n, axis=0) / norm)
-
-                # implement geometric median here
-                # shape (Ndays x Nfreqs)
-                multi_p = True
-                
-                if multi_p:
-                    partial_freq_iter = functools.partial(freq_iter, d, n)
-                    m_pool = multiprocessing.Pool(multiprocessing.cpu_count())
-                    pool_res = m_pool.map(partial_freq_iter, range(d.shape[1]))
-                    m_pool.close()
-                    m_pool.join()
-                    geo_med = np.array(pool_res)
-
+                # take bin average: real and imag separately
+                if median:
+                    real_avg.append(np.nanmedian(d.real, axis=0))
+                    imag_avg.append(np.nanmedian(d.imag, axis=0))
                 else:
-                    geo_med = np.empty(d.shape[1], dtype=complex)
-                    gm_init = None
-                    for freq in range(d.shape[1]):
-                        d_f = d[:, freq]
-                        if np.isnan(d_f).all():
-                            gm = np.nan + 1j*np.nan
-                        else:
-                            gm = geometric_median(d_f, weights=n[:, freq], init_guess=gm_init, keep_res=True)
-                            gm_init = gm
-                        geo_med[freq] = gm
+                    # for mean to account for varying nsamples, take nsamples weighted sum.
+                    # (inverse variance weighted sum).
+                    isfinite = np.isfinite(d)
+                    # d[~isfinite] = 0.0
+                    n[~isfinite] = 0.0
 
-                real_avg.append(geo_med.real)
-                imag_avg.append(geo_med.imag)
+                    # norm = np.sum(n, axis=0).clip(1e-99, np.inf)
+                    # real_avg.append(np.sum(d.real * n, axis=0) / norm)
+                    # imag_avg.append(np.sum(d.imag * n, axis=0) / norm)
+
+                    # implement geometric median here
+                    # shape (Ndays x Nfreqs)
+                    multi_p = True
+
+                    geo_med = np.empty(d.shape[1], dtype=complex)
+                    geo_med *= np.nan
+
+                    nnan_chans = np.logical_not(np.isnan(d).all(axis=0)).nonzero()[0]
+                    d_nn = d[:, nnan_chans]
+                    n_nn = n[:, nnan_chans]
+                    
+                    partial_freq_iter = functools.partial(freq_iter, d_nn, n_nn)
+                    if multi_p:
+                        m_pool = multiprocessing.Pool(multiprocessing.cpu_count())
+                        pool_res = m_pool.map(partial_freq_iter, range(d_nn.shape[1]))
+                        m_pool.close()
+                        m_pool.join()
+                    else:
+                        pool_res = list(map(partial_freq_iter, range(d_nn.shape[1])))
+
+                    geo_med_nn = np.array(pool_res)
+                    geo_med[nnan_chans] = geo_med_nn
+
+                    real_avg.append(geo_med.real)
+                    imag_avg.append(geo_med.imag)
 
             # get minimum bin flag
             f_min.append(np.nanmin(f, axis=0))
