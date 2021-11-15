@@ -374,6 +374,8 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
             d[:, flag_bin] *= np.nan
             f[:, flag_bin] = True
 
+            t_start = datetime.datetime.now()
+
             if np.isnan(d).all():
                 nan_arr = np.empty(d.shape[1])
                 nan_arr.fill(np.nan)
@@ -420,6 +422,9 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
 
                     real_avg.append(geo_med.real)
                     imag_avg.append(geo_med.imag)
+
+            t_end = datetime.datetime.now()
+            print('{} done in {}s'.format(ind, (t_end - t_now).total_seconds()))
 
             # get minimum bin flag
             f_min.append(np.nanmin(f, axis=0))
