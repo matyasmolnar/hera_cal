@@ -11,7 +11,7 @@ import numpy as np
 import operator
 import gc as garbage_collector
 import datetime
-import multiprocessing
+import multiprocess as multiprocessing
 import warnings
 from robstat.robstat import geometric_median
 
@@ -53,7 +53,7 @@ def baselines_same_across_nights(data_list):
     return same_across_nights
 
 
-def freq_iter(data, weights, freq):
+def gm_freq_iter(data, weights, freq):
     """
     For multiprocessing of geometric median
     """
@@ -62,7 +62,8 @@ def freq_iter(data, weights, freq):
         gm = np.nan + 1j*np.nan
     else:
         gm_init = np.nanmedian(d_f)
-        gm = geometric_median(d_f, weights=weights[:, freq], init_guess=gm_init, keep_res=True)
+        gm = geometric_median(d_f, weights=weights[:, freq], init_guess=gm_init, \
+                              method='weiszfeld')
     return gm
 
 
@@ -314,10 +315,12 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
     lst_bins = lst_bins % (2 * np.pi)
 
     # make final dictionaries
-    flags_min = odict()
-    data_avg = odict()
-    data_count = odict()
-    data_std = odict()
+    manager = multiprocessing.Manager()
+    flags_min = manager.dict()
+    data_avg = manager.dict()
+    data_count = manager.dict()
+    data_std = manager.dict()
+
 
     # return un-averaged data if desired
     if return_no_avg:
@@ -327,8 +330,14 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
 
         return lst_bins, data_bins, flag_bins
 
+
     # iterate over data keys (baselines) and get statistics
-    for i, key in enumerate(data.keys()):
+    # for i, key in enumerate(data.keys()):
+    def bl_iter(key):
+        """
+        For multiprocessing of geometric median
+        """
+        print('averaging baseline {}'.format(key))
 
         # create empty lists
         real_avg = []
@@ -375,6 +384,7 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
             f[:, flag_bin] = True
 
             t_start = datetime.datetime.now()
+            print(t_start)
 
             if np.isnan(d).all():
                 nan_arr = np.empty(d.shape[1])
@@ -393,38 +403,36 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
                     # d[~isfinite] = 0.0
                     n[~isfinite] = 0.0
 
-                    # norm = np.sum(n, axis=0).clip(1e-99, np.inf)
-                    # real_avg.append(np.sum(d.real * n, axis=0) / norm)
-                    # imag_avg.append(np.sum(d.imag * n, axis=0) / norm)
+                    bad_ants_h1cidr2 = [0, 2, 11, 24, 50, 53, 54, 67, 69, 98, 122, 136, 139]
+                    if key[2].lower() in ('en', 'ne') or any(ant in bad_ants_h1cidr2 for ant in key[:2]):
+                        # don't perform robust location estimates for cross polarizations and bad antennas
+                        norm = np.sum(n, axis=0).clip(1e-99, np.inf)
+                        real_avg.append(np.sum(d.real * n, axis=0) / norm)
+                        imag_avg.append(np.sum(d.imag * n, axis=0) / norm)
 
-                    # implement geometric median here
-                    # shape (Ndays x Nfreqs)
-                    multi_p = True
-
-                    geo_med = np.empty(d.shape[1], dtype=complex)
-                    geo_med *= np.nan
-
-                    nnan_chans = np.logical_not(np.isnan(d).all(axis=0)).nonzero()[0]
-                    d_nn = d[:, nnan_chans]
-                    n_nn = n[:, nnan_chans]
-                    
-                    partial_freq_iter = functools.partial(freq_iter, d_nn, n_nn)
-                    if multi_p:
-                        m_pool = multiprocessing.Pool(multiprocessing.cpu_count())
-                        pool_res = m_pool.map(partial_freq_iter, range(d_nn.shape[1]))
-                        m_pool.close()
-                        m_pool.join()
                     else:
+                        # implement geometric median here
+                        # shape (Ndays x Nfreqs)
+                        multi_p = True
+
+                        geo_med = np.empty(d.shape[1], dtype=complex)
+                        geo_med *= np.nan
+
+                        nnan_chans = np.logical_not(np.isnan(d).all(axis=0)).nonzero()[0]
+                        d_nn = d[:, nnan_chans]
+                        n_nn = n[:, nnan_chans]
+
+                        partial_freq_iter = functools.partial(gm_freq_iter, d_nn, n_nn)
                         pool_res = list(map(partial_freq_iter, range(d_nn.shape[1])))
 
-                    geo_med_nn = np.array(pool_res)
-                    geo_med[nnan_chans] = geo_med_nn
+                        geo_med_nn = np.array(pool_res)
+                        geo_med[nnan_chans] = geo_med_nn
 
-                    real_avg.append(geo_med.real)
-                    imag_avg.append(geo_med.imag)
+                        real_avg.append(geo_med.real)
+                        imag_avg.append(geo_med.imag)
 
             t_end = datetime.datetime.now()
-            print('{} done in {}s'.format(ind, (t_end - t_now).total_seconds()))
+            print('{} done in {}s'.format(ind, (t_end - t_start).total_seconds()))
 
             # get minimum bin flag
             f_min.append(np.nanmin(f, axis=0))
@@ -454,6 +462,19 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
         flags_min[key] = f_min
         data_std[key] = d_std
         data_count[key] = d_num
+
+        return
+
+    m_pool = multiprocessing.Pool(multiprocessing.cpu_count())
+    m_pool.map(bl_iter, data.keys())
+    m_pool.close()
+    m_pool.join()
+
+    # turn shared dictionaries into sorted odicts
+    flags_min = odict(sorted(flags_min.items()))
+    data_avg = odict(sorted(data_avg.items()))
+    data_count = odict(sorted(data_count.items()))
+    data_std = odict(sorted(data_std.items()))
 
     # turn into DataContainer objects
     data_avg = DataContainer(data_avg)
