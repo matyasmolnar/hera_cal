@@ -53,17 +53,14 @@ def baselines_same_across_nights(data_list):
     return same_across_nights
 
 
-def gm_freq_iter(data, weights, freq):
+def gm_freq_iter(data, weights, guess, freq):
     """
     For multiprocessing of geometric median
     """
     d_f = data[:, freq]
-    if np.isnan(d_f).all():
-        gm = np.nan + 1j*np.nan
-    else:
-        gm_init = np.nanmedian(d_f)
-        gm = geometric_median(d_f, weights=weights[:, freq], init_guess=gm_init, \
-                              method='weiszfeld')
+    gm_init = guess[freq]
+    gm = geometric_median(d_f, weights=weights[:, freq], init_guess=gm_init, \
+                          method='weiszfeld')
     return gm
 
 
@@ -383,8 +380,8 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
             d[:, flag_bin] *= np.nan
             f[:, flag_bin] = True
 
-            t_start = datetime.datetime.now()
-            print(t_start)
+            # t_start = datetime.datetime.now()
+            # print(t_start)
 
             if np.isnan(d).all():
                 nan_arr = np.empty(d.shape[1])
@@ -412,9 +409,6 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
 
                     else:
                         # implement geometric median here
-                        # shape (Ndays x Nfreqs)
-                        multi_p = True
-
                         geo_med = np.empty(d.shape[1], dtype=complex)
                         geo_med *= np.nan
 
@@ -422,17 +416,18 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
                         d_nn = d[:, nnan_chans]
                         n_nn = n[:, nnan_chans]
 
-                        partial_freq_iter = functools.partial(gm_freq_iter, d_nn, n_nn)
-                        pool_res = list(map(partial_freq_iter, range(d_nn.shape[1])))
+                        guess = np.nanmedian(d_nn, axis=0)
+                        partial_freq_iter = functools.partial(gm_freq_iter, d_nn, n_nn, guess)
+                        gm_res = list(map(partial_freq_iter, range(d_nn.shape[1])))
 
-                        geo_med_nn = np.array(pool_res)
+                        geo_med_nn = np.array(gm_res)
                         geo_med[nnan_chans] = geo_med_nn
 
                         real_avg.append(geo_med.real)
                         imag_avg.append(geo_med.imag)
 
-            t_end = datetime.datetime.now()
-            print('{} done in {}s'.format(ind, (t_end - t_start).total_seconds()))
+            # t_end = datetime.datetime.now()
+            # print('{} done in {}s'.format(ind, (t_end - t_start).total_seconds()))
 
             # get minimum bin flag
             f_min.append(np.nanmin(f, axis=0))
