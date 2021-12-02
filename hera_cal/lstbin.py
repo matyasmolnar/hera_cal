@@ -311,12 +311,16 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
     # wrap lst_bins if needed
     lst_bins = lst_bins % (2 * np.pi)
 
-    # make final dictionaries
-    manager = multiprocessing.Manager()
-    flags_min = manager.dict()
-    data_avg = manager.dict()
-    data_count = manager.dict()
-    data_std = manager.dict()
+    # make dictionaries
+    # manager = multiprocessing.Manager()
+    # flags_min = manager.dict()
+    # data_avg = manager.dict()
+    # data_count = manager.dict()
+    # data_std = manager.dict()
+    flags_min = dict.fromkeys(data.keys())
+    data_avg = dict.fromkeys(data.keys())
+    data_count = dict.fromkeys(data.keys())
+    data_std = dict.fromkeys(data.keys())
 
 
     # return un-averaged data if desired
@@ -457,8 +461,6 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
         flags_min[key] = f_min
         data_std[key] = d_std
         data_count[key] = d_num
-
-        return
 
     m_pool = multiprocessing.Pool(multiprocessing.cpu_count())
     m_pool.map(bl_iter, data.keys())
