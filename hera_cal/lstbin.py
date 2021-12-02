@@ -311,17 +311,6 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
     # wrap lst_bins if needed
     lst_bins = lst_bins % (2 * np.pi)
 
-    # make dictionaries
-    # manager = multiprocessing.Manager()
-    # flags_min = manager.dict()
-    # data_avg = manager.dict()
-    # data_count = manager.dict()
-    # data_std = manager.dict()
-    flags_min = dict.fromkeys(data.keys())
-    data_avg = dict.fromkeys(data.keys())
-    data_count = dict.fromkeys(data.keys())
-    data_std = dict.fromkeys(data.keys())
-
 
     # return un-averaged data if desired
     if return_no_avg:
@@ -456,16 +445,15 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
         d_std[d_nan] = 1.0
         d_num[d_nan] = 0.0
 
-        # insert into dictionaries
-        data_avg[key] = d_avg
-        flags_min[key] = f_min
-        data_std[key] = d_std
-        data_count[key] = d_num
+        # return results
+        return tuple({key: r} for r in (d_avg, f_min, d_std, d_num))
 
     m_pool = multiprocessing.Pool(multiprocessing.cpu_count())
-    m_pool.map(bl_iter, data.keys())
+    res = m_pool.map(bl_iter, data.keys())
     m_pool.close()
     m_pool.join()
+
+    flags_min, data_avg, data_count, data_std = (dict(ChainMap(*[r[i] for r in res])) for i in range(len(res[0])))
 
     # turn shared dictionaries into sorted odicts
     flags_min = odict(sorted(flags_min.items()))
