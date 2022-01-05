@@ -3,7 +3,7 @@
 # Licensed under the MIT License
 
 import os
-from collections import OrderedDict as odict
+from collections import ChainMap, OrderedDict as odict
 import copy
 import argparse
 import functools
@@ -13,7 +13,10 @@ import gc as garbage_collector
 import datetime
 import multiprocess as multiprocessing
 import warnings
+from robstat.ml import extrem_nans
 from robstat.robstat import geometric_median
+
+import uvtools
 
 from . import utils
 from . import version
@@ -169,6 +172,10 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
     lst_grid_left = lst_grid - dlst / 2
 
     # form new dictionaries
+    # make dictionaries global for multiprocessing purposes
+    global data
+    global flags
+    global nsamples
     # data is a dictionary that will hold other dictionaries as values, which will
     # themselves hold lists of ndarrays
     data = odict()
@@ -311,7 +318,6 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
     # wrap lst_bins if needed
     lst_bins = lst_bins % (2 * np.pi)
 
-
     # return un-averaged data if desired
     if return_no_avg:
         # return all binned data instead of just the bin average
@@ -320,14 +326,24 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
 
         return lst_bins, data_bins, flag_bins
 
-
     # iterate over data keys (baselines) and get statistics
     # for i, key in enumerate(data.keys()):
     def bl_iter(key):
         """
         For multiprocessing of geometric median
         """
-        print('averaging baseline {}'.format(key))
+        # print('averaging baseline {}'.format(key))
+
+        median = False  # turn on/off geometric median
+        do_hpf = False   # turn on/off high pass filtering
+
+        # HPF parameters
+        if do_hpf:
+            filter_centers = [0.] # center of rectangular fourier regions to filter
+            filter_half_widths = [1e-6] # half-width of rectangular fourier regions to filter
+            mode = 'clean'
+
+        bad_ants_h1cidr2 = [0, 2, 11, 24, 50, 53, 54, 67, 69, 98, 122, 136, 139]
 
         # create empty lists
         real_avg = []
@@ -377,31 +393,79 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
             # print(t_start)
 
             if np.isnan(d).all():
-                nan_arr = np.empty(d.shape[1])
-                nan_arr.fill(np.nan)
+                # skip all nan data slices
+                nan_arr = np.empty(d.shape[1], dtype=complex)
+                nan_arr.fill(np.nan + 1j*np.nan)
                 real_avg.append(nan_arr)
                 imag_avg.append(nan_arr)
+
             else:
-                # take bin average: real and imag separately
-                if median:
-                    real_avg.append(np.nanmedian(d.real, axis=0))
-                    imag_avg.append(np.nanmedian(d.imag, axis=0))
-                else:
+                # take bin location: real and imag separately
+                isfinite = np.isfinite(d)
+                n[~isfinite] = 0.0
+
+                if not median:
+                    # normal mean statistics - requires sigma clipping
                     # for mean to account for varying nsamples, take nsamples weighted sum.
                     # (inverse variance weighted sum).
-                    isfinite = np.isfinite(d)
-                    # d[~isfinite] = 0.0
-                    n[~isfinite] = 0.0
+                    norm = np.sum(n, axis=0).clip(1e-99, np.inf)
+                    real_avg_t = np.nansum(d.real * n, axis=0) / norm
+                    imag_avg_t = np.nansum(d.imag * n, axis=0) / norm
 
-                    bad_ants_h1cidr2 = [0, 2, 11, 24, 50, 53, 54, 67, 69, 98, 122, 136, 139]
+                    # add back nans as np.nansum sums nan slices to 0
+                    flagged_f = np.logical_not(isfinite).all(axis=0)
+                    real_avg_t[flagged_f] = np.nan
+                    imag_avg_t[flagged_f] = np.nan
+
+                    real_avg.append(real_avg_t)
+                    imag_avg.append(imag_avg_t)
+
+                else:
+                    # normal median estimation
                     if key[2].lower() in ('en', 'ne') or any(ant in bad_ants_h1cidr2 for ant in key[:2]):
-                        # don't perform robust location estimates for cross polarizations and bad antennas
-                        norm = np.sum(n, axis=0).clip(1e-99, np.inf)
-                        real_avg.append(np.sum(d.real * n, axis=0) / norm)
-                        imag_avg.append(np.sum(d.imag * n, axis=0) / norm)
+                        # don't perform geometric median estimates for cross polarizations and bad antennas
+                        # do straightforward marginal median instead
+                        real_avg.append(np.nanmedian(d.real, axis=0))
+                        imag_avg.append(np.nanmedian(d.imag, axis=0))
 
+                    # HPF + geometric median estimation
                     else:
-                        # implement geometric median here
+
+                        # delay filtering with CLEAN
+                        if do_hpf:  # turn off if not desired
+                            # copy data values and set nan entries to 0 (required for HPF to work correctly)
+                            d_ = d.copy()
+                            d_[~isfinite] = 0.0
+
+                            # get flagged band edges
+                            ex_nans = extrem_nans((~isfinite).all(axis=0))
+                            s_idxs, e_idxs = np.split(ex_nans, np.where(np.ediff1d(ex_nans) > 1)[0]+1)
+                            s = s_idxs.max() + 1
+                            e = e_idxs.min()
+
+                            # flagged tints
+                            isnan_tints = (~isfinite).all(axis=1)
+                            nnan_tints = np.logical_not(isnan_tints).nonzero()[0]
+
+                            # only do HPF on good range of channels (exclude flagged band edges)
+                            d_tr = d_[nnan_tints, s:e]
+                            f_tr = f[nnan_tints, s:e]
+                            wgts = np.logical_not(f_tr).astype(float)  # weights for when data is flagged or not
+                            freqs_tr = freq_array[s:e]
+
+                            # do high pass fourier filter
+                            # function returns model values, residuals (data - model, i.e. the HPF results) and an info dict
+                            _, d_res_tr, _ = uvtools.dspec.fourier_filter(freqs_tr, d_tr, wgts,
+                                filter_centers, filter_half_widths, mode, filter_dims=1, skip_wgt=0., \
+                                zero_residual_flags=True)
+
+                            # add back nans
+                            d_res_tr[f_tr] *= np.nan
+
+                            # now replace vis values with HPF values
+                            d[nnan_tints, s:e] = d_res_tr
+
+                        # geometric median implented below
                         geo_med = np.empty(d.shape[1], dtype=complex)
                         geo_med *= np.nan
 
@@ -426,10 +490,8 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
             f_min.append(np.nanmin(f, axis=0))
 
             # get other stats
-            with warnings.catch_warnings():
-                warnings.filterwarnings('ignore', 'Degrees of freedom <= 0 for slice.')
-                real_std.append(np.nanstd(d.real, axis=0))
-                imag_std.append(np.nanstd(d.imag, axis=0))
+            real_std.append(np.nanstd(d.real, axis=0))
+            imag_std.append(np.nanstd(d.imag, axis=0))
             bin_count.append(np.nansum(~np.isnan(d) * n, axis=0))
 
         # get final statistics
@@ -448,18 +510,30 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
         # return results
         return tuple({key: r} for r in (d_avg, f_min, d_std, d_num))
 
-    m_pool = multiprocessing.Pool(multiprocessing.cpu_count())
-    res = m_pool.map(bl_iter, data.keys())
-    m_pool.close()
-    m_pool.join()
+    old_settings = np.seterr(divide='ignore', invalid='ignore')  # ignore divide error
 
-    flags_min, data_avg, data_count, data_std = (dict(ChainMap(*[r[i] for r in res])) for i in range(len(res[0])))
+    with warnings.catch_warnings():
+        # ignore warnings that come from location estimates of all nan slices
+        warnings.filterwarnings('ignore', 'Degrees of freedom <= 0 for slice.')
+        warnings.filterwarnings('ignore', 'All-NaN slice encountered')
+        # ignore warnings that come from HPF of empty slice
+        warnings.simplefilter('ignore', category=RuntimeWarning)
 
-    # turn shared dictionaries into sorted odicts
-    flags_min = odict(sorted(flags_min.items()))
+        # multiprocessing of location estimates over baselines
+        m_pool = multiprocessing.Pool(multiprocessing.cpu_count())
+        res = m_pool.map(bl_iter, data.keys())
+        m_pool.close()
+        m_pool.join()
+
+    np.seterr(**old_settings)  # reset to default
+
+    data_avg, flags_min, data_std, data_count = (dict(ChainMap(*[r[i] for r in res])) for i in range(len(res[0])))
+
+    # turn returned dicts into sorted odicts
     data_avg = odict(sorted(data_avg.items()))
-    data_count = odict(sorted(data_count.items()))
+    flags_min = odict(sorted(flags_min.items()))
     data_std = odict(sorted(data_std.items()))
+    data_count = odict(sorted(data_count.items()))
 
     # turn into DataContainer objects
     data_avg = DataContainer(data_avg)
@@ -871,7 +945,11 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
                         if input_cals[j][k] is not None:
                             utils.echo("Opening and applying {}".format(input_cals[j][k]), verbose=verbose)
                             uvc = io.to_HERACal(input_cals[j][k])
-                            gains, cal_flags, quals, totquals = uvc.read()
+                            with warnings.catch_warnings():
+                                # ignore warnings that come from empty telescope_location and antenna_positions in UVCal
+                                warnings.filterwarnings('ignore', 'telescope_location is not set. Using known values for HERA.')
+                                warnings.filterwarnings('ignore', 'antenna_positions is not set. Using known values for HERA.')
+                                gains, cal_flags, quals, totquals = uvc.read()
                             # down select times in necessary
                             if False in tinds and uvc.Ntimes > 1:
                                 # If uvc has Ntimes == 1, then broadcast across time will work automatically
