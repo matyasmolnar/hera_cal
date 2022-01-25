@@ -335,12 +335,12 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
         # print('averaging baseline {}'.format(key))
 
         median = True  # turn on/off geometric median
-        do_hpf = False  # turn on/off high pass filtering
+        do_hpf = True  # turn on/off high pass filtering
 
         # HPF parameters
         if do_hpf:
             filter_centers = [0.] # center of rectangular fourier regions to filter
-            filter_half_widths = [1e-6] # half-width of rectangular fourier regions to filter
+            filter_half_widths = [0.5e-6] # half-width of rectangular fourier regions to filter
             mode = 'clean'
 
         bad_ants_h1cidr2 = [0, 2, 11, 24, 50, 53, 54, 67, 69, 98, 122, 136, 139]
@@ -455,9 +455,12 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
 
                             # do high pass fourier filter
                             # function returns model values, residuals (data - model, i.e. the HPF results) and an info dict
-                            _, d_res_tr, _ = uvtools.dspec.fourier_filter(freqs_tr, d_tr, wgts,
+                            _, d_res_tr, info = uvtools.dspec.fourier_filter(freqs_tr, d_tr, wgts,
                                 filter_centers, filter_half_widths, mode, filter_dims=1, skip_wgt=0., \
                                 zero_residual_flags=True)
+
+                            if 'skipped' in info['status']['axis_0'].values():
+                                raise ValueError('Some tints were skipped for {}'.format(key))
 
                             # add back nans
                             d_res_tr[f_tr] *= np.nan
