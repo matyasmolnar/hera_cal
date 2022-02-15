@@ -812,11 +812,17 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
     zen.{pol}.LST.{file_lst}.uv : holds LST bin avg (data_array) and bin count (nsample_array)
     zen.{pol}.STD.{file_lst}.uv : holds LST bin stand dev along real and imag (data_array)
     """
+    warnings.filterwarnings('ignore', message='Fixing auto-correlations to be be real-only, '\
+                            'after some imaginary values were detected in data_array.')
+
     # get file lst arrays
     (lst_grid, dlst, file_lsts, begin_lst, lst_arrs,
      time_arrs) = config_lst_bin_files(data_files, dlst=dlst, lst_start=lst_start, lst_stop=lst_stop, fixed_lst_start=fixed_lst_start,
                                        ntimes_per_file=ntimes_per_file, verbose=verbose)
     nfiles = len(file_lsts)
+
+    if (lst_start is not None) and ('lst_branch_cut' not in kwargs):
+        kwargs['lst_branch_cut'] = file_lsts[0][0]
 
     # select file_lsts
     if output_file_select is not None:
@@ -1043,19 +1049,15 @@ def lst_bin_files(data_files, input_cals=None, dlst=None, verbose=True, ntimes_p
         fkwargs['type'] = 'STD'
         std_file = "zen." + file_ext.format(**fkwargs)
 
-        # make sure the JD corresponding to file_lsts[0][0] is the lowest JD in the LST-binned data set
-        if lst_start is not None:
-            kwargs['lst_branch_cut'] = file_lsts[0][0]
-
         # check for overwrite
         if os.path.exists(bin_file) and overwrite is False:
             utils.echo("{} exists, not overwriting".format(bin_file), verbose=verbose)
             continue
         # write to file
         io.write_vis(bin_file, bin_data, bin_lst, freq_array, antpos, flags=flag_data, verbose=verbose,
-                     nsamples=num_data, filetype='uvh5', x_orientation=x_orientation, **kwargs)
+                     nsamples=num_data, filetype='uvh5', x_orientation=x_orientation, fix_autos=True, **kwargs) # fix_autos=True added
         io.write_vis(std_file, std_data, bin_lst, freq_array, antpos, flags=flag_data, verbose=verbose,
-                     nsamples=num_data, filetype='uvh5', x_orientation=x_orientation, **kwargs)
+                     nsamples=num_data, filetype='uvh5', x_orientation=x_orientation, fix_autos=True, **kwargs) # fix_autos=True added
 
         del bin_file, std_file, bin_data, std_data, num_data, bin_lst, flag_data
         del data_conts, flag_conts, std_conts, num_conts
