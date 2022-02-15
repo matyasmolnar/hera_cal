@@ -1532,10 +1532,13 @@ def write_vis(fname, data, lst_array, freq_array, antpos, time_array=None, flags
             if verbose:
                 print("saving {}".format(fname))
 
+        # pass on fix_autos kwarg to write_miriad and write_uvh5
+        fix_autos = kwargs.get('fix_autos', False)
+
         if filetype == 'miriad':
-            uvd.write_miriad(fname, clobber=True)
+            uvd.write_miriad(fname, clobber=True, fix_autos=fix_autos)
         elif filetype == 'uvh5':
-            uvd.write_uvh5(fname, clobber=True)
+            uvd.write_uvh5(fname, clobber=True, fix_autos=fix_autos)
         else:
             raise AttributeError("didn't recognize filetype: {}".format(filetype))
 

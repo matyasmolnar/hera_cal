@@ -335,7 +335,7 @@ def lst_bin(data_list, lst_list, flags_list=None, nsamples_list=None, dlst=None,
         # print('averaging baseline {}'.format(key))
 
         median = True  # turn on/off geometric median
-        do_hpf = True  # turn on/off high pass filtering
+        do_hpf = False  # turn on/off high pass filtering
 
         # HPF parameters
         if do_hpf:
